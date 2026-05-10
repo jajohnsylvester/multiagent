@@ -40,12 +40,22 @@ def health_check():
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
     try:
-        # We pass request.topic directly without the 'input=' keyword
-        response = await root_agent.run_async(request.topic)
+        final_text = ""
         
-        # If the response object is complex, we might need response.text 
-        # or response.content depending on the version
-        return {"status": "success", "report": str(response)}
+        # We use 'async for' to pull events from the sequential agent stream
+        async for event in root_agent.run_async(request.topic):
+            # Check if this specific event is the final text response
+            if hasattr(event, 'text') and event.text:
+                final_text = event.text
+            elif hasattr(event, 'is_final_response') and event.is_final_response():
+                # Some versions of ADK provide a content object in the event
+                final_text = event.content.parts[0].text
+
+        if not final_text:
+            raise HTTPException(status_code=500, detail="No final response received from agents.")
+
+        return {"status": "success", "report": final_text}
+        
     except Exception as e:
         print(f"Pipeline Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
