@@ -1,5 +1,5 @@
 fastapi
 uvicorn
-adk
+google-adk
 google-genai
 pydantic
