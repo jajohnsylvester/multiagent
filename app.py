@@ -1,8 +1,9 @@
 import os
-from typing import List
 from fastapi import FastAPI
-from google.adk.agents import Agent, ParallelAgent, ToolContext
-from google.adk.llms import Gemini
+# Agents and Orchestrators come from .agents
+from google.adk.agents import Agent, ParallelAgent 
+# ToolContext comes from .tools
+from google.adk.tools import ToolContext 
 import uvicorn
 
 app = FastAPI()
