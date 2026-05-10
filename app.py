@@ -3,19 +3,20 @@ import uvicorn
 from fastapi import FastAPI
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.tools import ToolContext
-from google.adk.cli.fast_api import AdkWebServer
+# Use the high-level FastAPI utility
+from google.adk.cli.fast_api import get_fast_api_app
 
-# 1. Define your tool
+# 1. Your Tool Logic
 def update_world_log(tool_context: ToolContext, observation: str) -> dict:
     logs = tool_context.state.get("world_log", [])
     logs.append(observation)
     tool_context.state["world_log"] = logs
     return {"status": "Observation recorded."}
 
-# 2. Define the Agents
+# 2. Agent Definitions
 explorer = Agent(
     name="Explorer",
-    model="gemini-2.5-flash",
+    model="gemini-2.5-flash", # Updated to current 2026 stable model
     instruction="Find 2 unique facts and use 'update_world_log'.",
     tools=[update_world_log]
 )
@@ -23,26 +24,22 @@ explorer = Agent(
 scribe = Agent(
     name="Scribe",
     model="gemini-2.5-flash",
-    instruction="Read 'world_log' from state and write a legend."
+    instruction="Read 'world_log' from state and write a brief legend."
 )
 
-# 3. Create the Orchestrator
+# 3. Multi-Agent Orchestrator
 agent_world = SequentialAgent(
     name="SeqAgentWorld",
     sub_agents=[explorer, scribe]
 )
 
-# 4. Explicitly setup the ADK Web Server
-# This is more stable than the internal 'get_fast_api_app' helper
-server = AdkWebServer(agent=agent_world)
-app = server.get_fast_api_app()
+# 4. Generate the FastAPI App
+# Signature fix: Just pass the agent. The UI is bundled by default.
+app = get_fast_api_app(agent_world)
 
-# 5. Add a simple health check for Render
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
+# 5. Render Startup Logic
 if __name__ == "__main__":
-    # Render requires binding to 0.0.0.0 and the $PORT variable
+    # Render requires binding to 0.0.0.0 and the dynamic $PORT
     port = int(os.environ.get("PORT", 10000))
+    print(f"AgentWorld active on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
