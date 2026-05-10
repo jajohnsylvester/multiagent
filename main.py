@@ -3,79 +3,79 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Configure logging to show in Render/Terminal console
+# Correct Namespaced Imports for Google ADK
+from google.adk.agents import Agent
+from google.adk.agents import SequentialAgent
+from google.adk.runtime import Runtime
+
+# Configure logging for Render console
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from google.adk.agents import Agent
-from google.adk.agents import SequentialAgent
+app = FastAPI(title="Multi-Agent Research Service")
 
-app = FastAPI(title="Debuggable Research Agent")
-
-# --- 1. Agents ---
+# --- 1. Define Specialized Agents ---
+# We use gemini-2.0-flash for high-speed research and synthesis
 researcher = Agent(
     name="Researcher",
-    instruction="Collect raw data and facts on the topic.",
+    instruction="We gather raw data, primary sources, and technical facts for the given topic.",
     model="gemini-2.0-flash"
 )
 
 synthesizer = Agent(
     name="Synthesizer",
-    instruction="Create a structured report from the research provided.",
+    instruction="We take raw data from the Researcher and transform it into a formal executive report.",
     model="gemini-2.0-flash"
 )
 
-# --- 2. Sequential Multi-Agent ---
+# --- 2. Create the Sequential Pipeline ---
 root_agent = SequentialAgent(
     name="ResearchPipeline",
     sub_agents=[researcher, synthesizer]
 )
+
+# Initialize the ADK Runtime (The shim that prevents the model_copy error)
+runtime = Runtime()
 
 class ResearchRequest(BaseModel):
     topic: str
 
 @app.get("/")
 def health():
-    return {"status": "online"}
+    return {"status": "ADK Web Enabled", "active": True}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
-    logger.info(f"--- Starting Pipeline for topic: {request.topic} ---")
+    logger.info(f"--- Starting Sequential Pipeline: {request.topic} ---")
     final_text = ""
     
     try:
-        # Iterate through the async generator
-        async for event in root_agent.run_async(request.topic):
-            # Log the event type to see where the process is
-            logger.info(f"Event Received: {type(event).__name__}")
+        # We use runtime.stream to safely wrap the topic string into an InvocationContext
+        # This prevents the AttributeError: 'str' object has no attribute 'model_copy'
+        async for event in runtime.stream(root_agent, request.topic):
+            event_type = type(event).__name__
+            logger.info(f"Pipeline Event: {event_type}")
             
-            # Log event content if it's a model turn or result
+            # Extract content from the stream events
             if hasattr(event, 'text') and event.text:
-                logger.info(f"Text captured from {type(event).__name__}")
                 final_text = event.text
-            
-            # Deep inspection of event content for debugging
-            elif hasattr(event, 'content'):
-                logger.info("Event has content attribute, extracting parts...")
-                if hasattr(event.content, 'parts') and event.content.parts:
+            elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                if event.content.parts:
                     final_text = event.content.parts[0].text
 
         if not final_text:
-            logger.warning("Pipeline finished but final_text is empty.")
-            final_text = "Agents completed but returned no text."
+            logger.error("Pipeline reached end of stream without capturing text.")
+            return {"status": "error", "message": "No final report generated."}
 
-        logger.info("--- Pipeline Completed Successfully ---")
-        
-        # We return a plain dict. 
-        # This fixes the "'str' object has no attribute 'model_copy'" error.
+        logger.info("--- Pipeline Successful ---")
         return {"status": "success", "report": str(final_text)}
 
     except Exception as e:
-        # This captures the traceback and logs it to Render
-        logger.error(f"CRITICAL PIPELINE ERROR: {str(e)}", exc_info=True)
+        logger.error(f"PIPELINE CRASH: {str(e)}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
+    # Bind to Render's dynamic port or default to 10000
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
