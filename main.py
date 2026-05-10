@@ -40,9 +40,12 @@ def health_check():
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
     try:
-        # SequentialAgent pipes the output of A into B automatically
-        response = await root_agent.run_async(input=request.topic)
-        return {"status": "success", "report": response.text}
+        # We pass request.topic directly without the 'input=' keyword
+        response = await root_agent.run_async(request.topic)
+        
+        # If the response object is complex, we might need response.text 
+        # or response.content depending on the version
+        return {"status": "success", "report": str(response)}
     except Exception as e:
         print(f"Pipeline Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
