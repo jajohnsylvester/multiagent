@@ -1,72 +1,47 @@
 import os
-from fastapi import FastAPI
-# Agents and Orchestrators come from .agents
-from google.adk.agents import Agent, ParallelAgent 
-# ToolContext comes from .tools
-from google.adk.tools import ToolContext 
-import uvicorn
+import logging
+from google.adk.agents import Agent, SequentialAgent
+from google.adk.tools import ToolContext
+# New import for the built-in Web Server
+from google.adk.server import Server 
 
-app = FastAPI()
+# 1. Setup Logging
+logging.basicConfig(level=logging.INFO)
 
-# --- 1. Tools for interacting with the "World" ---
-
+# 2. Define Shared Logic
 def update_world_log(tool_context: ToolContext, observation: str) -> dict:
-    """Adds a new observation to the shared world log."""
-    # Get existing logs or start empty
     logs = tool_context.state.get("world_log", [])
     logs.append(observation)
-    # Save back to shared state
     tool_context.state["world_log"] = logs
-    return {"status": "Observation recorded in the world."}
+    return {"status": "Observation recorded."}
 
-# --- 2. Define the Agents ---
-
-# The Explorer: Gathers raw data/observations
+# 3. Define the Agents
 explorer = Agent(
     name="Explorer",
     model="gemini-2.5-flash",
-    instruction="""
-    You are an explorer in a new digital world. 
-    Your goal is to find 2 unique facts about the topic provided.
-    Use the 'update_world_log' tool to record your findings.
-    """,
+    instruction="Find 2 unique facts about the topic and use 'update_world_log'.",
     tools=[update_world_log]
 )
 
-# The Scribe: Synthesizes observations into a story
 scribe = Agent(
     name="Scribe",
     model="gemini-2.5-flash",
-    instruction="""
-    You are the chronicler of the world.
-    Wait for the Explorer to finish, then look at the 'world_log' in the state.
-    Write a short, dramatic legend based on those findings.
-    """
+    instruction="Read the 'world_log' in the state and write a brief legend."
 )
 
-# --- 3. Orchestration (The World Engine) ---
-
-# We use ParallelAgent so they both inhabit the same session state simultaneously
-agent_world = ParallelAgent(
-    name="AgentWorld",
+# 4. Create the Multi-Agent Workflow
+agent_world = SequentialAgent(
+    name="MultiAgentWorld",
     sub_agents=[explorer, scribe]
 )
 
-# --- 4. Web Endpoints ---
-
-@app.get("/")
-async def home():
-    return {"status": "World is online", "endpoint": "/simulate?topic=Mars"}
-
-@app.get("/simulate")
-async def simulate(topic: str):
-    # This triggers the multi-agent interaction
-    result = agent_world.run(f"Begin exploration of: {topic}")
-    return {
-        "world_events": result,
-        "final_state": agent_world.state  # Returns the shared 'world_log'
-    }
+# 5. Initialize the ADK Server
+# This automatically enables the Web UI playground
+app = Server(agent=agent_world)
 
 if __name__ == "__main__":
+    # Render provides the port; default to 10000 if not found
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    
+    # Run the server on 0.0.0.0 so it's accessible externally
+    app.run(host="0.0.0.0", port=port)
