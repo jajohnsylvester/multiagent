@@ -3,16 +3,16 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Correcting the imports to the flattened namespace
+# Standard imports for Google ADK
 try:
-    from adk import Agent, SequentialAgent, Runtime
-    logger_msg = "Using flattened 'adk' namespace"
-except ImportError:
-    from google.adk.agents import Agent, SequentialAgent
+    from google.adk.agents import Agent
+    from google.adk.agents.sequential_agent import SequentialAgent
     from google.adk.runtime import Runtime
-    logger_msg = "Using 'google.adk' namespace"
+    logger_msg = "Successfully imported google.adk"
+except ImportError as e:
+    # If this fails, we will log exactly what is missing
+    logger_msg = f"Import failed: {str(e)}"
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info(logger_msg)
@@ -22,13 +22,13 @@ app = FastAPI(title="Multi-Agent Research Service")
 # --- 1. Agents ---
 researcher = Agent(
     name="Researcher",
-    instruction="We gather raw data and technical facts for the given topic.",
+    instruction="Gather raw data and technical facts for the topic.",
     model="gemini-2.0-flash"
 )
 
 synthesizer = Agent(
     name="Synthesizer",
-    instruction="We transform raw research data into a formal executive report.",
+    instruction="Transform raw research into a professional report.",
     model="gemini-2.0-flash"
 )
 
@@ -45,14 +45,14 @@ class ResearchRequest(BaseModel):
 
 @app.get("/")
 def health():
-    return {"status": "Online", "mode": logger_msg}
+    return {"status": "Online", "diagnostic": logger_msg}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
-    logger.info(f"--- Starting Pipeline: {request.topic} ---")
+    logger.info(f"Starting Pipeline: {request.topic}")
     final_text = ""
     try:
-        # Use runtime.stream to handle the context correctly
+        # Runtime.stream is the safest way to execute to avoid context errors
         async for event in runtime.stream(root_agent, request.topic):
             if hasattr(event, 'text') and event.text:
                 final_text = event.text
@@ -61,12 +61,12 @@ async def run_pipeline(request: ResearchRequest):
                     final_text = event.content.parts[0].text
 
         if not final_text:
-            return {"status": "error", "message": "No output generated."}
+            return {"status": "error", "message": "Pipeline did not produce text."}
 
         return {"status": "success", "report": str(final_text)}
 
     except Exception as e:
-        logger.error(f"Pipeline Crash: {str(e)}", exc_info=True)
+        logger.error(f"Execution Error: {str(e)}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
