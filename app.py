@@ -7,13 +7,13 @@ app = FastAPI()
 # 1. Define specialized sub-agents
 researcher = Agent(
     name="Researcher",
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     instruction="Search for and provide 3-5 technical facts about the user's topic."
 )
 
 writer = Agent(
     name="Writer",
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     instruction="Using the facts provided by the Researcher, write a professional executive summary."
 )
 
