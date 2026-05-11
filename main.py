@@ -1,18 +1,15 @@
-# --- Top of main.py: SQLite Fix for ChromaDB on Render ---
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 import os
 import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# Correct namespaced imports for ADK v1.33+
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.runners import Runner
-from google.adk.sessions import ChromaDBSessionService # Use ChromaDB for persistence
+from google.adk.sessions import DatabaseSessionService  # Stable Persistent Service
 from google.genai import types
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -36,38 +33,35 @@ root_agent = SequentialAgent(
     sub_agents=[researcher, synthesizer]
 )
 
-# --- 2. Persistent Storage (ChromaDB) ---
-db_path = "./adk_db"
-if not os.path.exists(db_path):
-    os.makedirs(db_path)
-
-session_service = ChromaDBSessionService(path=db_path)
+# --- 2. Persistent Database Session (SQLite) ---
+# This replaces ChromaDBSessionService with the official stable equivalent
+db_url = "sqlite:///sessions.db"
+session_service = DatabaseSessionService(url=db_url)
 APP_NAME = "ResearchLab"
 
 class ResearchRequest(BaseModel):
     topic: str
+
+@app.get("/")
+def health():
+    return {"status": "online", "storage": "DatabaseSessionService (SQLite)"}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
     logger.info(f"--- Starting Pipeline for: {request.topic} ---")
     final_text = ""
     
-    # Configuration
+    # We use a static user/session for now
     USER_ID = "default_user"
-    SESSION_ID = "research_session_001" # Unique ID
+    SESSION_ID = "research_session_001"
 
     try:
-        # --- THE FIX: Ensure session exists before running ---
+        # Ensure session exists
         try:
             await session_service.get_session(APP_NAME, USER_ID, SESSION_ID)
-            logger.info(f"Existing session found: {SESSION_ID}")
         except Exception:
-            logger.info(f"Creating new session: {SESSION_ID}")
-            await session_service.create_session(
-                app_name=APP_NAME, 
-                user_id=USER_ID, 
-                session_id=SESSION_ID
-            )
+            logger.info(f"Initializing new session: {SESSION_ID}")
+            await session_service.create_session(APP_NAME, USER_ID, SESSION_ID)
 
         runner = Runner(
             agent=root_agent,
@@ -90,6 +84,9 @@ async def run_pipeline(request: ResearchRequest):
                     for part in event.content.parts:
                         if hasattr(part, 'text') and part.text:
                             final_text = part.text
+
+        if not final_text:
+            return {"status": "error", "message": "No output produced."}
 
         return {"status": "success", "report": str(final_text)}
 
