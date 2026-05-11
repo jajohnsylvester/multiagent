@@ -4,3 +4,4 @@ google-adk[extensions]
 google-genai
 pydantic
 sqlalchemy
+aiosqlite
