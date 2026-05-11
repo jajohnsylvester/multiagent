@@ -3,65 +3,86 @@ import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Standard Google ADK imports for production environments
+# ADK Imports
 from google.adk.agents import Agent, SequentialAgent
-from google.adk.runners import Runner 
+from google.adk.runners import Runner
+from google.adk.sessions import ChromaDBSessionService  # The Persistent Fix
+from google.genai import types
 
-# Configure logging for Render console visibility
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Multi-Agent Research Service")
+app = FastAPI(title="Multi-Agent Research Service (Persistent)")
 
-# --- 1. Define Agents ---
+# --- 1. Agents ---
 researcher = Agent(
     name="Researcher",
-    instruction="We gather raw technical data and primary market facts for the given topic.",
+    instruction="Collect raw technical data and financial facts for the topic.",
     model="gemini-2.0-flash"
 )
 
 synthesizer = Agent(
     name="Synthesizer",
-    instruction="We transform raw data from the Researcher into a formal executive report.",
+    instruction="Transform raw data from the Researcher into a formal executive report.",
     model="gemini-2.0-flash"
 )
 
-# --- 2. Sequential Orchestration ---
+# --- 2. Sequential Multi-Agent ---
 root_agent = SequentialAgent(
     name="ResearchPipeline",
     sub_agents=[researcher, synthesizer]
 )
+
+# --- 3. ChromaDB Initialization ---
+# We store the database in a local folder called 'adk_db'
+# On Render, this will persist across deployments if using a Disk, 
+# or reset on every restart on the Free Tier.
+db_path = "./adk_db"
+if not os.path.exists(db_path):
+    os.makedirs(db_path)
+
+session_service = ChromaDBSessionService(path=db_path)
+APP_NAME = "ResearchLab_Persistent"
 
 class ResearchRequest(BaseModel):
     topic: str
 
 @app.get("/")
 def health():
-    return {"status": "online", "engine": "Google ADK Runner"}
+    return {"status": "online", "storage": "ChromaDB"}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
-    logger.info(f"--- Starting Pipeline: {request.topic} ---")
+    logger.info(f"--- Starting Persistent Pipeline: {request.topic} ---")
     final_text = ""
     
     try:
-        # The Runner prevents the 'str' has no attribute 'model_copy' error
-        # by creating a valid InvocationContext internally.
-        runner = Runner(agent=root_agent)
+        runner = Runner(
+            agent=root_agent,
+            app_name=APP_NAME,
+            session_service=session_service
+        )
         
-        async for event in runner.run_async(request.topic):
-            # Extract content from the stream of agent events
+        content = types.Content(
+            role="user",
+            parts=[types.Part(text=request.topic)]
+        )
+
+        async for event in runner.run_async(
+            user_id="default_user", 
+            session_id="shared_research_history", # All queries saved here
+            new_message=content
+        ):
             if hasattr(event, 'content') and event.content:
                 if hasattr(event.content, 'parts') and event.content.parts:
-                    # Capture the most recent text output in the sequence
-                    part = event.content.parts[0]
-                    if hasattr(part, 'text') and part.text:
-                        final_text = part.text
+                    for part in event.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            final_text = part.text
 
         if not final_text:
-            return {"status": "error", "message": "The agents failed to return a report."}
+            raise Exception("Pipeline execution failed to produce text.")
 
-        logger.info("--- Pipeline Completed Successfully ---")
         return {"status": "success", "report": str(final_text)}
 
     except Exception as e:
@@ -70,6 +91,5 @@ async def run_pipeline(request: ResearchRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Bind to Render's dynamic port (defaulting to 10000)
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
