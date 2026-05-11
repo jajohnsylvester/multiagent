@@ -38,10 +38,13 @@ root_agent = SequentialAgent(
 if not os.path.exists("./data"):
     os.makedirs("./data")
 
-db_url = "sqlite:///data/sessions.db"
+# Change from 'sqlite:///data/sessions.db' 
+# to 'sqlite+aiosqlite:///data/sessions.db'
+db_url = "sqlite+aiosqlite:///data/sessions.db"
 
-# FIX: Pass db_url as a positional argument
+# Keep the positional argument fix from the previous step
 session_service = DatabaseSessionService(db_url)
+
 APP_NAME = "ResearchLab"
 
 class ResearchRequest(BaseModel):
