@@ -3,3 +3,5 @@ uvicorn
 google-adk[extensions]
 google-genai
 pydantic
+chromadb
+pysqlite3-binary
