@@ -1,6 +1,6 @@
 import os
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 
 # Standard Google ADK imports
@@ -33,18 +33,13 @@ root_agent = SequentialAgent(
     sub_agents=[researcher, synthesizer]
 )
 
-# --- 2. Persistent Database Session (SQLite) ---
-# Ensure the directory exists for the SQLite file
+# --- 2. Persistent Database Session (aiosqlite) ---
 if not os.path.exists("./data"):
     os.makedirs("./data")
 
-# Change from 'sqlite:///data/sessions.db' 
-# to 'sqlite+aiosqlite:///data/sessions.db'
+# Using the async driver as established previously
 db_url = "sqlite+aiosqlite:///data/sessions.db"
-
-# Keep the positional argument fix from the previous step
 session_service = DatabaseSessionService(db_url)
-
 APP_NAME = "ResearchLab"
 
 class ResearchRequest(BaseModel):
@@ -52,24 +47,21 @@ class ResearchRequest(BaseModel):
 
 @app.get("/")
 def health():
-    return {"status": "online", "storage": "DatabaseSessionService (SQLite)"}
+    return {"status": "online", "storage": "DatabaseSessionService"}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
     logger.info(f"--- Starting Pipeline for: {request.topic} ---")
     final_text = ""
     
+    # Static identifiers for the session
     USER_ID = "default_user"
-    SESSION_ID = "research_session_001"
+    SESSION_ID = "research_session_unique_01" 
 
     try:
-        # Ensure session exists in the database
-        try:
-            await session_service.get_session(APP_NAME, USER_ID, SESSION_ID)
-        except Exception:
-            logger.info(f"Initializing new database session: {SESSION_ID}")
-            await session_service.create_session(APP_NAME, USER_ID, SESSION_ID)
-
+        # THE FIX: Let the Runner handle session management.
+        # Most versions of the Runner will automatically initialize the session 
+        # within the session_service if it's missing during run_async.
         runner = Runner(
             agent=root_agent,
             app_name=APP_NAME,
