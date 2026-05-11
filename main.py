@@ -1,10 +1,16 @@
+# --- Top of main.py: Critical SQLite Fix for Render ---
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
 import os
 import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-# Standard Google ADK imports
+# ADK Core Imports
 from google.adk.agents import Agent, SequentialAgent
+from google.adk.apps import App  # Unified orchestrator
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService 
 from google.genai import types
@@ -28,12 +34,13 @@ synthesizer = Agent(
     model="gemini-2.0-flash"
 )
 
+# --- 2. Orchestration Components ---
 root_agent = SequentialAgent(
     name="ResearchPipeline",
     sub_agents=[researcher, synthesizer]
 )
 
-# --- 2. Persistent Database Session (aiosqlite) ---
+# SQLite with async driver for Render
 if not os.path.exists("./data"):
     os.makedirs("./data")
 
@@ -41,41 +48,41 @@ db_url = "sqlite+aiosqlite:///data/sessions.db"
 session_service = DatabaseSessionService(db_url)
 APP_NAME = "ResearchLab"
 
+# Create the unified App object (This fixes the 'Session not found' error)
+adk_app = App(
+    name=APP_NAME,
+    root_agent=root_agent
+)
+
 class ResearchRequest(BaseModel):
     topic: str
 
 @app.get("/")
 def health():
-    return {"status": "online", "storage": "DatabaseSessionService"}
+    return {"status": "online", "engine": "ADK App + DatabaseSession"}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
     logger.info(f"--- Starting Pipeline for: {request.topic} ---")
     final_text = ""
     
-    # Static identifiers
+    # Identifiers
     USER_ID = "default_user"
-    SESSION_ID = "research_session_unique_01" 
+    SESSION_ID = "research_session_fixed_01" 
 
     try:
-        # --- THE FIX: Explicitly create/get the session ---
+        # Step 1: Explicitly ensure the session exists in DB
         try:
-            # Check if session exists
             await session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
-            logger.info(f"Found existing session: {SESSION_ID}")
+            logger.info("Existing session confirmed.")
         except Exception:
-            # If not found, create it using keyword arguments
-            logger.info(f"Session not found. Creating session: {SESSION_ID}")
-            await session_service.create_session(
-                app_name=APP_NAME, 
-                user_id=USER_ID, 
-                session_id=SESSION_ID
-            )
-        
-        # Now that the session is guaranteed to exist in the DB, the Runner will work
+            logger.info("Initializing fresh session record...")
+            await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
+
+        # Step 2: Initialize Runner using the 'app' parameter
+        # This creates the link between the agents and the session DB
         runner = Runner(
-            agent=root_agent,
-            app_name=APP_NAME,
+            app=adk_app,
             session_service=session_service
         )
         
@@ -84,6 +91,7 @@ async def run_pipeline(request: ResearchRequest):
             parts=[types.Part(text=request.topic)]
         )
 
+        # Step 3: Run the async stream
         async for event in runner.run_async(
             user_id=USER_ID, 
             session_id=SESSION_ID, 
@@ -94,9 +102,6 @@ async def run_pipeline(request: ResearchRequest):
                     for part in event.content.parts:
                         if hasattr(part, 'text') and part.text:
                             final_text = part.text
-
-        if not final_text:
-            return {"status": "error", "message": "The pipeline did not produce text."}
 
         return {"status": "success", "report": str(final_text)}
 
