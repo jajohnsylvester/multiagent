@@ -37,7 +37,6 @@ root_agent = SequentialAgent(
 if not os.path.exists("./data"):
     os.makedirs("./data")
 
-# Using the async driver as established previously
 db_url = "sqlite+aiosqlite:///data/sessions.db"
 session_service = DatabaseSessionService(db_url)
 APP_NAME = "ResearchLab"
@@ -54,14 +53,26 @@ async def run_pipeline(request: ResearchRequest):
     logger.info(f"--- Starting Pipeline for: {request.topic} ---")
     final_text = ""
     
-    # Static identifiers for the session
+    # Static identifiers
     USER_ID = "default_user"
     SESSION_ID = "research_session_unique_01" 
 
     try:
-        # THE FIX: Let the Runner handle session management.
-        # Most versions of the Runner will automatically initialize the session 
-        # within the session_service if it's missing during run_async.
+        # --- THE FIX: Explicitly create/get the session ---
+        try:
+            # Check if session exists
+            await session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
+            logger.info(f"Found existing session: {SESSION_ID}")
+        except Exception:
+            # If not found, create it using keyword arguments
+            logger.info(f"Session not found. Creating session: {SESSION_ID}")
+            await session_service.create_session(
+                app_name=APP_NAME, 
+                user_id=USER_ID, 
+                session_id=SESSION_ID
+            )
+        
+        # Now that the session is guaranteed to exist in the DB, the Runner will work
         runner = Runner(
             agent=root_agent,
             app_name=APP_NAME,
