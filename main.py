@@ -1,4 +1,4 @@
-# --- Top of main.py: Critical SQLite Fix for Render ---
+# --- Top of main.py: SQLite Fix for Render ---
 __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -10,8 +10,7 @@ from pydantic import BaseModel
 
 # ADK Core Imports
 from google.adk.agents import Agent, SequentialAgent
-from google.adk.apps import App  # Unified orchestrator
-from google.adk.runners import Runner
+from google.adk.runtime import Runtime
 from google.adk.sessions import DatabaseSessionService 
 from google.genai import types
 
@@ -34,74 +33,56 @@ synthesizer = Agent(
     model="gemini-2.0-flash"
 )
 
-# --- 2. Orchestration Components ---
+# --- 2. Pipeline ---
 root_agent = SequentialAgent(
     name="ResearchPipeline",
     sub_agents=[researcher, synthesizer]
 )
 
-# SQLite with async driver for Render
+# --- 3. Persistent Storage (SQLite Async) ---
 if not os.path.exists("./data"):
     os.makedirs("./data")
 
 db_url = "sqlite+aiosqlite:///data/sessions.db"
 session_service = DatabaseSessionService(db_url)
-APP_NAME = "ResearchLab"
 
-# Create the unified App object (This fixes the 'Session not found' error)
-adk_app = App(
-    name=APP_NAME,
-    root_agent=root_agent
-)
+# Initialize the Runtime with the session service
+# The Runtime handles the "Session Not Found" logic automatically
+runtime = Runtime(session_service=session_service)
 
 class ResearchRequest(BaseModel):
     topic: str
 
 @app.get("/")
 def health():
-    return {"status": "online", "engine": "ADK App + DatabaseSession"}
+    return {"status": "online", "engine": "ADK Runtime + Persistent DB"}
 
 @app.post("/research")
 async def run_pipeline(request: ResearchRequest):
-    logger.info(f"--- Starting Pipeline for: {request.topic} ---")
+    logger.info(f"--- Starting Pipeline: {request.topic} ---")
     final_text = ""
     
-    # Identifiers
-    USER_ID = "default_user"
-    SESSION_ID = "research_session_fixed_01" 
+    # We use a unique session ID per request or a shared one
+    # Note: Runtime.stream will create this session if it doesn't exist
+    SESSION_ID = "main_research_session" 
 
     try:
-        # Step 1: Explicitly ensure the session exists in DB
-        try:
-            await session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
-            logger.info("Existing session confirmed.")
-        except Exception:
-            logger.info("Initializing fresh session record...")
-            await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
-
-        # Step 2: Initialize Runner using the 'app' parameter
-        # This creates the link between the agents and the session DB
-        runner = Runner(
-            app=adk_app,
-            session_service=session_service
-        )
-        
-        content = types.Content(
-            role="user",
-            parts=[types.Part(text=request.topic)]
-        )
-
-        # Step 3: Run the async stream
-        async for event in runner.run_async(
-            user_id=USER_ID, 
-            session_id=SESSION_ID, 
-            new_message=content
+        # Runtime.stream is the safest way to execute on Render.
+        # It manages the 'InvocationContext' and session lifecycle internally.
+        async for event in runtime.stream(
+            root_agent, 
+            request.topic,
+            session_id=SESSION_ID
         ):
-            if hasattr(event, 'content') and event.content:
-                if hasattr(event.content, 'parts') and event.content.parts:
-                    for part in event.content.parts:
-                        if hasattr(part, 'text') and part.text:
-                            final_text = part.text
+            # Extracting content from the event stream
+            if hasattr(event, 'text') and event.text:
+                final_text = event.text
+            elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                if event.content.parts:
+                    final_text = event.content.parts[0].text
+
+        if not final_text:
+            return {"status": "error", "message": "The pipeline did not produce output."}
 
         return {"status": "success", "report": str(final_text)}
 
